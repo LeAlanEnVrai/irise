@@ -1,1 +1,486 @@
-
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voyage de la Truite Fario</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #4eb3d3; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        #instructions {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.9); font-size: 0.9em; text-align: center;
+            text-shadow: 1px 1px 5px rgba(0, 0, 0, 0.8); z-index: 10;
+        }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; font-size: 1.5em; text-shadow: 2px 2px 10px rgba(0, 0, 0, 0.8); z-index: 20;
+        }
+        #speed-info {
+            position: absolute; top: 20px; right: 20px;
+            color: rgba(255, 255, 255, 0.9); font-size: 0.9em;
+            text-shadow: 1px 1px 5px rgba(0, 0, 0, 0.8); z-index: 10;
+        }
+        #loop-info {
+            position: absolute; top: 50px; right: 20px;
+            color: rgba(255, 255, 255, 0.9); font-size: 0.9em;
+            text-shadow: 1px 1px 5px rgba(0, 0, 0, 0.8); z-index: 10;
+        }
+        #pause-button {
+            position: absolute; top: 20px; left: 20px; padding: 12px 24px; font-size: 1em;
+            background: rgba(78, 179, 211, 0.8); color: white;
+            border: 2px solid rgba(255, 255, 255, 0.5); border-radius: 8px;
+            cursor: pointer; font-weight: bold; text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.5);
+            transition: all 0.3s ease; z-index: 100;
+        }
+        #pause-button:hover { background: rgba(78, 179, 211, 1); transform: scale(1.05); }
+        #pause-button:active { transform: scale(0.95); }
+        #restart-button {
+            position: absolute; top: 70px; left: 20px; padding: 12px 24px; font-size: 1em;
+            background: rgba(147, 112, 219, 0.8); color: white;
+            border: 2px solid rgba(255, 255, 255, 0.5); border-radius: 8px;
+            cursor: pointer; font-weight: bold; text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.5);
+            transition: all 0.3s ease; z-index: 100;
+        }
+        #restart-button:hover { background: rgba(147, 112, 219, 1); transform: scale(1.05); }
+        #restart-button:active { transform: scale(0.95); }
+        #paused-overlay {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; font-size: 3em; text-shadow: 3px 3px 15px rgba(0, 0, 0, 0.9);
+            opacity: 0; pointer-events: none; transition: opacity 0.3s ease; z-index: 50;
+        }
+        #paused-overlay.visible { opacity: 0.8; }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="instructions">🌊 Souris pour regarder • Espace pour pause • Découvrez la vie de la truite fario</div>
+    <div id="loading">Chargement du modèle 3D...</div>
+    <div id="speed-info">Distance: <span id="distance">0</span>m</div>
+    <div id="loop-info">Boucle: <span id="loop-count">1</span></div>
+    <button id="pause-button">⏸ Pause</button>
+    <button id="restart-button">🔄 Restart</button>
+    <div id="paused-overlay">⏸ PAUSE</div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script>
+        let isPaused = false;
+        
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x4eb3d3, 0.015);
+        scene.background = new THREE.Color(0x4eb3d3);
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+        
+        const ambientLight = new THREE.AmbientLight(0x87ceeb, 0.7);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        directionalLight.position.set(5, 15, 5);
+        directionalLight.castShadow = true;
+        scene.add(directionalLight);
+        
+        const waterLight = new THREE.HemisphereLight(0x4eb3d3, 0x2e5c8a, 0.5);
+        scene.add(waterLight);
+        
+        // Particules
+        const particleGeometry = new THREE.BufferGeometry();
+        const particleCount = 2000;
+        const positions = new Float32Array(particleCount * 3);
+        const colors = new Float32Array(particleCount * 3);
+        
+        const waterColors = [
+            new THREE.Color(0x4eb3d3),
+            new THREE.Color(0x7ec8e3),
+            new THREE.Color(0x9dd9ed),
+            new THREE.Color(0xb4a5d4),
+            new THREE.Color(0xd4a5c4),
+        ];
+        
+        for (let i = 0; i < particleCount * 3; i += 3) {
+            positions[i] = (Math.random() - 0.5) * 40;
+            positions[i + 1] = Math.random() * 15 - 5;
+            positions[i + 2] = Math.random() * 300;
+            
+            const color = waterColors[Math.floor(Math.random() * waterColors.length)];
+            colors[i] = color.r;
+            colors[i + 1] = color.g;
+            colors[i + 2] = color.b;
+        }
+        
+        particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        particleGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        
+        const particleMaterial = new THREE.PointsMaterial({
+            size: 0.1, vertexColors: true, transparent: true, opacity: 0.6
+        });
+        const particles = new THREE.Points(particleGeometry, particleMaterial);
+        scene.add(particles);
+        
+        // Fond de rivière
+        const riverBedGeometry = new THREE.PlaneGeometry(25, 800, 100, 300);
+        const riverBedMaterial = new THREE.MeshStandardMaterial({
+            color: 0x6b8db5, roughness: 0.9, metalness: 0.1
+        });
+        const riverBed = new THREE.Mesh(riverBedGeometry, riverBedMaterial);
+        riverBed.rotation.x = -Math.PI / 2;
+        riverBed.position.y = -6;
+        riverBed.position.z = 200;
+        
+        const positions_bed = riverBedGeometry.attributes.position.array;
+        for (let i = 0; i < positions_bed.length; i += 3) {
+            const x = positions_bed[i];
+            const y = positions_bed[i + 1];
+            positions_bed[i + 2] = Math.sin(x * 0.2) * Math.cos(y * 0.1) * 0.8 + Math.sin(x * 0.5) * 0.3 + Math.random() * 0.3;
+        }
+        riverBedGeometry.attributes.position.needsUpdate = true;
+        riverBedGeometry.computeVertexNormals();
+        scene.add(riverBed);
+        
+        // Rochers
+        const rocks = [];
+        const rockGeometry = new THREE.DodecahedronGeometry(1, 0);
+        for (let i = 0; i < 60; i++) {
+            const rockMaterial = new THREE.MeshStandardMaterial({ 
+                color: new THREE.Color().setHSL(0.55, 0.2, 0.4 + Math.random() * 0.2), roughness: 0.9
+            });
+            const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+            const scale = 0.4 + Math.random() * 1.2;
+            rock.scale.set(scale, scale * 0.7, scale);
+            const isOnBank = Math.random() > 0.6;
+            if (isOnBank) {
+                rock.position.set(
+                    (Math.random() - 0.5) > 0 ? 11 + Math.random() * 4 : -11 - Math.random() * 4,
+                    -4 + Math.random() * 1, i * 15 + Math.random() * 10
+                );
+            } else {
+                rock.position.set((Math.random() - 0.5) * 18, -5.5 + Math.random() * 0.5, i * 15 + Math.random() * 10);
+            }
+            rock.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+            rock.castShadow = true;
+            rock.receiveShadow = true;
+            rocks.push(rock);
+            scene.add(rock);
+        }
+        
+        // Végétation
+        const plants = [];
+        const reedGeometry = new THREE.CylinderGeometry(0.05, 0.08, 3, 6);
+        const plantColors = [0x6ba58d, 0x7da59d, 0x8d9dad, 0xa59db4];
+        
+        for (let i = 0; i < 80; i++) {
+            const plantMaterial = new THREE.MeshStandardMaterial({ 
+                color: plantColors[Math.floor(Math.random() * plantColors.length)], roughness: 0.8
+            });
+            const plant = new THREE.Mesh(reedGeometry, plantMaterial);
+            const side = Math.random() > 0.5 ? 1 : -1;
+            plant.position.set(side * (12 + Math.random() * 3), -3.5, i * 12 + Math.random() * 8);
+            plant.rotation.z = (Math.random() - 0.5) * 0.3;
+            plants.push(plant);
+            scene.add(plant);
+        }
+        
+        // Branches
+        const logs = [];
+        for (let i = 0; i < 15; i++) {
+            const logGeometry = new THREE.CylinderGeometry(0.15, 0.18, 2 + Math.random() * 2, 8);
+            const logMaterial = new THREE.MeshStandardMaterial({ color: 0x7a8fa5, roughness: 0.9 });
+            const log = new THREE.Mesh(logGeometry, logMaterial);
+            log.position.set((Math.random() - 0.5) * 16, -5 + Math.random() * 0.5, i * 40 + Math.random() * 20);
+            log.rotation.set(Math.random() * 0.3, Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.5);
+            logs.push(log);
+            scene.add(log);
+        }
+        
+        // TEXTES
+        const textMeshes = [];
+        const textMessages = [
+            { lines: ["Une rivière, un poisson", "Dans les eaux fraîches du Léguer vit la truite fario.", "Elle est un symbole des rivières bretonnes en bonne santé.", "Sa présence indique une eau propre, froide et bien oxygénée."], z: 20, x: -10, color: '#4eb3d3' },
+            { lines: ["L'hiver, un moment clé", "De novembre à février, la truite entre en période de reproduction.", "On appelle cette phase la fraye.", "Elle remonte les petits affluents de la rivière."], z: 40, x: 10, color: '#7ec8e3' },
+            { lines: ["Les nids de la truite", "Les femelles creusent des petits creux dans les graviers.", "Ces nids sont appelés redds.", "Elles y déposent leurs œufs, ensuite fécondés par les mâles."], z: 60, x: -10, color: '#9dd9ed' },
+            { lines: ["Une période fragile", "Pendant la fraye, la truite est très vulnérable.", "Pour la protéger, la pêche est interdite sur le Léguer.", "Cette pause est essentielle pour la survie de l'espèce."], z: 80, x: 10, color: '#b4a5d4' },
+            { lines: ["La naissance des alevins", "À la fin de l'hiver, les œufs éclosent.", "De minuscules alevins apparaissent entre février et mars.", "La température de l'eau joue un rôle déterminant."], z: 100, x: -10, color: '#d4a5c4' },
+            { lines: ["Le retour du printemps", "Avec le printemps, la rivière se réveille.", "Les insectes aquatiques deviennent plus nombreux.", "La truite reprend une activité intense pour se nourrir."], z: 120, x: 10, color: '#4eb3d3' },
+            { lines: ["Une saison riche", "Éphémères et trichoptères émergent à la surface.", "Ils constituent une source de nourriture importante.", "C'est aussi une période appréciée des pêcheurs à la mouche."], z: 140, x: -10, color: '#7ec8e3' },
+            { lines: ["L'été et la chaleur", "En été, la truite cherche la fraîcheur.", "Elle se réfugie dans les zones profondes ou ombragées.", "Son activité est surtout matinale ou en soirée."], z: 160, x: 10, color: '#9dd9ed' },
+            { lines: ["Des refuges naturels", "Les arbres, les sources et les fonds profonds protègent la truite.", "Ces refuges thermiques sont essentiels à sa survie.", "La qualité de l'eau du Léguer reste un atout majeur."], z: 175, x: -10, color: '#b4a5d4' },
+            { lines: ["Le temps des réserves", "À l'automne, la truite mange davantage.", "Elle accumule de l'énergie pour l'hiver à venir.", "Son comportement change progressivement."], z: 190, x: 10, color: '#d4a5c4' },
+            { lines: ["Le retour vers l'amont", "Les truites commencent à remonter la rivière.", "Elles rejoignent les zones de reproduction.", "La pêche ferme pour laisser la rivière au repos."], z: 198, x: -10, color: '#4eb3d3' },
+        ];
+        
+        textMessages.forEach(msg => {
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = 2048;
+            canvas.height = 768;
+            
+            context.fillStyle = msg.color;
+            context.globalAlpha = 0.35;
+            context.fillRect(0, 0, canvas.width, canvas.height);
+            context.globalAlpha = 1.0;
+            
+            context.fillStyle = 'rgba(255, 255, 255, 0.95)';
+            context.textAlign = 'center';
+            context.textBaseline = 'middle';
+            context.shadowColor = 'rgba(0, 0, 0, 0.8)';
+            context.shadowBlur = 15;
+            
+            const lineHeight = 140;
+            const startY = (canvas.height - (msg.lines.length - 1) * lineHeight) / 2;
+            
+            msg.lines.forEach((line, index) => {
+                const fontSize = index === 0 ? 100 : 70;
+                context.font = 'Bold ' + fontSize + 'px Arial';
+                context.fillText(line, canvas.width / 2, startY + index * lineHeight);
+            });
+            
+            const texture = new THREE.CanvasTexture(canvas);
+            const spriteMaterial = new THREE.SpriteMaterial({ map: texture, transparent: true });
+            const sprite = new THREE.Sprite(spriteMaterial);
+            
+            sprite.position.set(msg.x, 3, msg.z);
+            sprite.scale.set(16, 6, 1);
+            
+            textMeshes.push(sprite);
+            scene.add(sprite);
+        });
+        
+        let fish = null;
+        let fishMixer = null;
+        let fishBones = [];
+        const fishSpeed = 1.5;
+        let fishProgress = 0;
+        let swimTime = 0;
+        let loopCount = 1;
+        const maxDistance = 200;
+        
+        // CHARGER LE MODÈLE DEPUIS LE FICHIER EXTERNE
+        const loader = new THREE.GLTFLoader();
+        loader.load(
+            'trout.glb',
+            function(gltf) {
+                fish = gltf.scene;
+                const box = new THREE.Box3().setFromObject(fish);
+                const size = box.getSize(new THREE.Vector3());
+                const maxSize = Math.max(size.x, size.y, size.z);
+                const scale = 2 / maxSize;
+                fish.scale.set(scale, scale, scale);
+                fish.position.set(0, -2, 0);
+                fish.rotation.y = 0;
+                fish.traverse((node) => {
+                    if (node.isMesh) {
+                        node.castShadow = true;
+                        node.receiveShadow = true;
+                        fishBones.push(node);
+                    }
+                });
+                scene.add(fish);
+                if (gltf.animations && gltf.animations.length) {
+                    fishMixer = new THREE.AnimationMixer(fish);
+                    gltf.animations.forEach((clip) => {
+                        const action = fishMixer.clipAction(clip);
+                        action.play();
+                    });
+                }
+                document.getElementById('loading').style.display = 'none';
+            },
+            function(xhr) {
+                const percent = Math.round((xhr.loaded / xhr.total) * 100);
+                document.getElementById('loading').textContent = 'Chargement: ' + percent + '%';
+            },
+            function(error) {
+                console.error('Erreur de chargement:', error);
+                document.getElementById('loading').textContent = 'Erreur de chargement du modèle';
+            }
+        );
+        
+        function resetLoop() {
+            fishProgress = 0;
+            if (fish) fish.position.z = 0;
+            rocks.forEach((rock, i) => {
+                const isOnBank = Math.random() > 0.6;
+                rock.position.z = i * 15 + Math.random() * 10;
+                if (isOnBank) {
+                    rock.position.x = (Math.random() - 0.5) > 0 ? 11 + Math.random() * 4 : -11 - Math.random() * 4;
+                } else {
+                    rock.position.x = (Math.random() - 0.5) * 18;
+                }
+            });
+            plants.forEach((plant, i) => { plant.position.z = i * 12 + Math.random() * 8; });
+            logs.forEach((log, i) => { log.position.z = i * 40 + Math.random() * 20; });
+            const particlePositions = particles.geometry.attributes.position.array;
+            for (let i = 0; i < particleCount * 3; i += 3) {
+                particlePositions[i] = (Math.random() - 0.5) * 40;
+                particlePositions[i + 1] = Math.random() * 15 - 5;
+                particlePositions[i + 2] = Math.random() * 300;
+            }
+            particles.geometry.attributes.position.needsUpdate = true;
+            loopCount++;
+            document.getElementById('loop-count').textContent = loopCount;
+        }
+        
+        function restartJourney() {
+            fishProgress = 0;
+            swimTime = 0;
+            loopCount = 1;
+            isPaused = false;
+            if (fish) {
+                fish.position.set(0, -2, 0);
+                fish.rotation.y = 0;
+            }
+            document.getElementById('loop-count').textContent = loopCount;
+            document.getElementById('distance').textContent = '0';
+            document.getElementById('pause-button').innerHTML = '⏸ Pause';
+            document.getElementById('paused-overlay').classList.remove('visible');
+            rocks.forEach((rock, i) => {
+                const isOnBank = Math.random() > 0.6;
+                rock.position.z = i * 15 + Math.random() * 10;
+                if (isOnBank) {
+                    rock.position.x = (Math.random() - 0.5) > 0 ? 11 + Math.random() * 4 : -11 - Math.random() * 4;
+                } else {
+                    rock.position.x = (Math.random() - 0.5) * 18;
+                }
+            });
+            plants.forEach((plant, i) => { plant.position.z = i * 12 + Math.random() * 8; });
+            logs.forEach((log, i) => { log.position.z = i * 40 + Math.random() * 20; });
+            const particlePositions = particles.geometry.attributes.position.array;
+            for (let i = 0; i < particleCount * 3; i += 3) {
+                particlePositions[i] = (Math.random() - 0.5) * 40;
+                particlePositions[i + 1] = Math.random() * 15 - 5;
+                particlePositions[i + 2] = Math.random() * 300;
+            }
+            particles.geometry.attributes.position.needsUpdate = true;
+        }
+        
+        function togglePause() {
+            isPaused = !isPaused;
+            const button = document.getElementById('pause-button');
+            const overlay = document.getElementById('paused-overlay');
+            if (isPaused) {
+                button.innerHTML = '▶ Play';
+                overlay.classList.add('visible');
+            } else {
+                button.innerHTML = '⏸ Pause';
+                overlay.classList.remove('visible');
+            }
+        }
+        
+        document.getElementById('pause-button').addEventListener('click', togglePause);
+        document.getElementById('restart-button').addEventListener('click', restartJourney);
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                togglePause();
+            }
+            if (e.code === 'KeyR') {
+                restartJourney();
+            }
+        });
+        
+        const cameraOffset = new THREE.Vector3(-4, 1, -6);
+        let cameraAngleX = 0;
+        let cameraAngleY = 0;
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        
+        renderer.domElement.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            previousMousePosition = { x: e.clientX, y: e.clientY };
+        });
+        
+        renderer.domElement.addEventListener('mousemove', (e) => {
+            if (isDragging && fish) {
+                const deltaX = e.clientX - previousMousePosition.x;
+                const deltaY = e.clientY - previousMousePosition.y;
+                cameraAngleY -= deltaX * 0.005;
+                cameraAngleX -= deltaY * 0.005;
+                cameraAngleX = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, cameraAngleX));
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            }
+        });
+        
+        renderer.domElement.addEventListener('mouseup', () => { isDragging = false; });
+        renderer.domElement.addEventListener('mouseleave', () => { isDragging = false; });
+        
+        const clock = new THREE.Clock();
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = isPaused ? 0 : clock.getDelta();
+            if (isPaused) {
+                clock.getDelta();
+            }
+            if (fish && !isPaused) {
+                if (fishProgress >= maxDistance) resetLoop();
+                fishProgress += fishSpeed * delta;
+                fish.position.z = fishProgress;
+                swimTime += delta * 5;
+                fish.position.y = -2 + Math.sin(swimTime * 0.5) * 0.25;
+                fish.position.x = Math.sin(swimTime * 0.3) * 0.5;
+                const tailWag = Math.sin(swimTime);
+                fish.rotation.y = tailWag * 0.15;
+                fish.rotation.z = tailWag * 0.12;
+                fishBones.forEach((bone, index) => {
+                    const tailFactor = index / Math.max(fishBones.length - 1, 1);
+                    bone.rotation.y = tailWag * 0.2 * tailFactor;
+                });
+                fish.rotation.x = Math.sin(swimTime * 0.5) * 0.06;
+                if (fishMixer) fishMixer.update(delta);
+                document.getElementById('distance').textContent = Math.round(fishProgress);
+                directionalLight.position.set(fish.position.x + 5, 15, fish.position.z + 5);
+            }
+            if (fish) {
+                const rotatedOffset = cameraOffset.clone();
+                rotatedOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraAngleY);
+                rotatedOffset.applyAxisAngle(new THREE.Vector3(1, 0, 0), cameraAngleX);
+                camera.position.x = fish.position.x + rotatedOffset.x;
+                camera.position.y = fish.position.y + rotatedOffset.y;
+                camera.position.z = fish.position.z + rotatedOffset.z;
+                camera.lookAt(fish.position);
+            } else {
+                camera.position.set(-4, 1, -6);
+                camera.lookAt(0, -2, 0);
+            }
+            if (!isPaused) {
+                const particlePositions = particles.geometry.attributes.position.array;
+                for (let i = 0; i < particlePositions.length; i += 3) {
+                    particlePositions[i + 1] += Math.sin(Date.now() * 0.001 + i) * 0.001;
+                    particlePositions[i] += Math.sin(Date.now() * 0.0005 + i) * 0.002;
+                    if (fish && particlePositions[i + 2] < fish.position.z - 50) {
+                        particlePositions[i + 2] += 300;
+                        particlePositions[i] = (Math.random() - 0.5) * 40;
+                    }
+                }
+                particles.geometry.attributes.position.needsUpdate = true;
+                plants.forEach((plant, i) => {
+                    plant.rotation.z = Math.sin(Date.now() * 0.0008 + i) * 0.15;
+                });
+                rocks.forEach(rock => {
+                    if (rock.position.z < fish.position.z - 100) rock.position.z += 900;
+                });
+                plants.forEach(plant => {
+                    if (plant.position.z < fish.position.z - 100) plant.position.z += 960;
+                });
+                logs.forEach(log => {
+                    if (log.position.z < fish.position.z - 100) log.position.z += 600;
+                });
+            }
+            renderer.render(scene, camera);
+        }
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        animate();
+    </script>
+</body>
+</html>
